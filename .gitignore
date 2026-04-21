@@ -1,0 +1,24 @@
+# ── Python / Django ───────────────────────────────────────
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+
+# SQLite — local DB, not shared
+backend/db.sqlite3
+
+# ChromaDB vector store — regenerated via sync
+backend/chroma_store/
+
+# ── Next.js ───────────────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+frontend/.env*.local
+
+# ── OS ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
