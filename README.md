@@ -47,7 +47,7 @@ Contiene una app web estática simple para probar la generación de tests.
 
 ```bash
 cd test_project
-# Levantar la aplicación localmente en http://localhost:8080
+# Levantar la aplicación localmente en http://localhost:8081
 python -m http.server 8081
 ```
 
