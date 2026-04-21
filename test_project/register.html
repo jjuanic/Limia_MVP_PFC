@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Register — TaskApp</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="auth-wrapper">
+    <div class="auth-card">
+      <h1>Create account</h1>
+      <p class="subtitle">Get started with TaskApp for free</p>
+
+      <div id="register-error"   class="alert alert-error"></div>
+      <div id="register-success" class="alert alert-success"></div>
+
+      <form id="register-form" novalidate>
+        <div class="form-group">
+          <label for="name">Full name</label>
+          <input
+            type="text"
+            id="name"
+            name="name"
+            placeholder="Jane Doe"
+            required
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input
+            type="email"
+            id="email"
+            name="email"
+            placeholder="you@example.com"
+            required
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            placeholder="At least 6 characters"
+            required
+          />
+        </div>
+
+        <button type="submit" id="register-btn" class="btn btn-primary">
+          Create account
+        </button>
+      </form>
+
+      <p style="text-align:center; margin-top:1.25rem; font-size:13px; color:var(--muted)">
+        Already have an account?
+        <a href="login.html" id="login-link" style="color:var(--primary)">Sign in</a>
+      </p>
+    </div>
+  </div>
+
+  <script src="js/auth.js"></script>
+</body>
+</html>

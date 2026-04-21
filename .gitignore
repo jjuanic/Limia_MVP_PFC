@@ -18,7 +18,19 @@ frontend/out/
 frontend/.env.local
 frontend/.env*.local
 
+# ── Test Project ──────────────────────────────────────────
+test_project/node_modules/
+test_project/cypress/videos/
+test_project/cypress/screenshots/
+test_project/cypress/downloads/
+test_project/cypress/results/
+test_project/cypress/reports/
+test_project/cypress.env.json
+
 # ── OS ────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ── Node Global ───────────────────────────────────────────
+node_modules/

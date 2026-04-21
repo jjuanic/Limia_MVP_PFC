@@ -41,6 +41,23 @@ npm run dev
 
 Frontend disponible en `http://localhost:3000`
 
+## 4 — Proyecto de Prueba (test_project)
+
+Contiene una app web estática simple para probar la generación de tests.
+
+```bash
+cd test_project
+# Levantar la aplicación localmente en http://localhost:8080
+python -m http.server 8081
+```
+
+Para probar los scripts generados con Cypress (en otra terminal):
+```bash
+cd test_project
+npm install
+npx cypress open
+```
+
 ## Endpoints de la API
 
 | Método | URL | Descripción |
