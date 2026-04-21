@@ -7,10 +7,10 @@ Stack simplificado: Django + SQLite + ChromaDB + LangChain + Ollama (Mistral) + 
 - Node.js 18+
 - [Ollama](https://ollama.com) instalado y corriendo
 
-## 1 — Levantar Ollama con Mistral
+## 1 — Levantar Ollama con Llama3.1
 
 ```bash
-ollama run mistral
+ollama run llama3.1
 ```
 
 ## 2 — Backend
