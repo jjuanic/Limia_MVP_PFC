@@ -13,27 +13,65 @@ from .models import Project, TestRequest
 from .rag import get_vector_store, index_project, extract_selectors
 
 OLLAMA_BASE_URL = "http://localhost:11434"
-LLM_MODEL = "llama3.1"
+LLM_MODEL = "deepseek-coder:6.7b"
 
 CYPRESS_PROMPT = PromptTemplate(
     input_variables=["context", "question"],
     template="""You are an expert QA engineer specialised in Cypress end-to-end testing.
-Below is the actual source code of the project under test. Read it carefully.
+
+The REQUIREMENT and the PROJECT MAP (routes, IDs, button texts, UI messages) are embedded in the REQUIREMENT block below.
+Additional source-code context is provided here for reference:
 
 ---
 {context}
 ---
 
-Your task: write a Cypress test for this requirement:
-"{question}"
+REQUIREMENT (includes project map):
+{question}
 
-STRICT RULES — violations make the test useless:
-1. ONLY use CSS selectors (classes, IDs, data-testid, element tags) that you can SEE VERBATIM in the source code above. Do NOT invent or guess any selector.
-2. ONLY use route paths that appear in the source code above. Do NOT guess URLs.
-3. If you cannot find a selector for an element, use cy.contains('exact visible text') instead of inventing an attribute.
-4. Before writing the test, output a short comment block listing every selector you found in the context and will use.
-5. Wrap everything in a single describe() block.
-6. Output only valid Cypress JavaScript. No markdown fences, no explanations outside comments.
+PRE-FLIGHT — decide which of three responses to give:
+
+A) If the message is a greeting, question, or general conversation (not a test instruction):
+   Respond ONLY with:
+   CHAT: <friendly response in the same language as the user, max 2 sentences>
+
+B) If the message is a test instruction but some steps cannot be mapped to real elements:
+   Respond ONLY with this exact format:
+
+PLAN_NEEDED:
+I could not generate the test because some steps could not be matched to real elements.
+
+Mapped steps:
+- <step description>: <selector or route used>
+
+Unmapped steps:
+- <step description>: MISSING — <what is needed>
+
+Suggestion: <one sentence on what the user should clarify or add to the instruction>
+
+C) If the message is a test instruction and ALL steps can be mapped → write the Cypress test following the RULES below.
+
+RULES — any violation makes the test wrong:
+1. cy.visit() — ONLY use paths listed under "Available pages". Never visit a path not in that list.
+   - Use the exact filename: cy.visit('/register.html'), NOT cy.visit('/register') or cy.visit('/').
+
+2. Clicking elements:
+   - If the element has an ID: cy.get('#id').click() — that's it. Nothing else.
+   - NEVER write cy.get('#id').contains('...').click() — chaining .contains() after .get() searches for child elements, not the element itself. This is always wrong for buttons.
+   - NEVER write cy.contains('text').click() for an element that has an ID in the project map.
+
+3. CSS class selectors:
+   - NEVER use class selectors like cy.contains('.notification', '...') or cy.get('.someClass') unless that exact class appears in the project map.
+   - If a success or error message needs to be asserted, use cy.get('#id').should('be.visible') where #id is from the project map.
+
+4. cy.contains() — ONLY for elements with NO id in the project map, using exact strings from "Visible button/link text" or "UI messages". Never paraphrase or change capitalisation.
+
+5. Text assertions — copy strings VERBATIM from "UI messages". If none listed, use .should('be.visible') instead of asserting text content.
+
+6. Redirections — the destination page is listed under "Available pages". Use the exact filename (e.g. index.html, not /dashboard or /home).
+
+7. Wrap everything in a single describe() block. No markdown fences. No prose outside code comments.
+8. Output ONLY the JavaScript code. No preamble ("Here is your test..."), no explanation after the closing brace. The first character of your response must be the letter 'd' (from describe).
 """,
 )
 
@@ -103,29 +141,45 @@ def generate_test(request, project_id):
 
     body = json.loads(request.body)
     instruction = body.get("instruction", "").strip()
-    if len(instruction) < 20:
-        return JsonResponse(
-            {"error": "Instruction too short. Describe what you want to test in more detail."},
-            status=400,
+    if not instruction:
+        return JsonResponse({"error": "Instruction cannot be empty."}, status=400)
+
+    TEST_WORDS = {
+        "visit", "click", "type", "fill", "check", "verify", "test",
+        "register", "login", "navigate", "assert", "submit", "enter",
+        "select", "open", "form", "button", "field", "redirect", "page",
+        "sign", "user", "password", "email", "input", "appear", "show",
+    }
+    looks_like_test = any(w in instruction.lower().split() for w in TEST_WORDS)
+
+    llm = Ollama(model=LLM_MODEL, base_url=OLLAMA_BASE_URL)
+
+    if not looks_like_test:
+        # Skip RAG — direct conversational reply
+        chat_prompt = (
+            "You are Limia, a friendly assistant that helps generate Cypress tests. "
+            "Respond naturally and briefly (1-2 sentences) in the same language the user used. "
+            "Do not refuse or restrict your response.\n\n"
+            f"User: {instruction}"
+        )
+        cypress_code = f"CHAT: {llm.invoke(chat_prompt).strip()}"
+    else:
+        # 1. Retrieve semantically relevant chunks
+        vector_store = get_vector_store(project.id)
+        retriever = vector_store.as_retriever(search_kwargs={"k": 4})
+
+        # 2. Build RAG chain
+        chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            retriever=retriever,
+            chain_type="stuff",
+            chain_type_kwargs={"prompt": CYPRESS_PROMPT},
         )
 
-    # 1. Retrieve semantically relevant chunks
-    vector_store = get_vector_store(project.id)
-    retriever = vector_store.as_retriever(search_kwargs={"k": 10})
-
-    # 2. Build RAG chain
-    llm = Ollama(model=LLM_MODEL, base_url=OLLAMA_BASE_URL)
-    chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=retriever,
-        chain_type="stuff",
-        chain_type_kwargs={"prompt": CYPRESS_PROMPT},
-    )
-
-    # 3. Generate — inject real selectors so the model can't hallucinate them
-    selectors = extract_selectors(project.directory_path)
-    augmented_instruction = f"{selectors}\nREQUIREMENT: {instruction}"
-    cypress_code = chain.run(augmented_instruction)
+        # 3. Generate — inject real selectors so the model can't hallucinate them
+        selectors = extract_selectors(project.directory_path)
+        augmented_instruction = f"{selectors}\nREQUIREMENT: {instruction}"
+        cypress_code = chain.run(augmented_instruction)
 
     # 4. Persist
     test_request = TestRequest.objects.create(
@@ -134,10 +188,19 @@ def generate_test(request, project_id):
         generated_cypress_code=cypress_code,
     )
 
+    stripped = cypress_code.strip()
+    if stripped.startswith("CHAT:"):
+        response_type = "chat"
+    elif stripped.startswith("PLAN_NEEDED:"):
+        response_type = "plan"
+    else:
+        response_type = "code"
+
     return JsonResponse(
         {
             "test_request_id": test_request.id,
             "cypress_code": cypress_code,
+            "response_type": response_type,
         },
         status=201,
     )

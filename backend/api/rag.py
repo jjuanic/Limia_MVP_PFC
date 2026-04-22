@@ -54,14 +54,16 @@ def _collect_source_files(directory: str) -> list[Path]:
 
 def extract_selectors(directory: str) -> str:
     """
-    Scan HTML and JS files for real IDs, data-testid, and dynamic class assignments.
-    Returns a plain-text summary injected directly into the LLM prompt so the model
-    doesn't have to infer selectors from code chunks.
+    Scan HTML and JS/TS files and return a structured project map injected
+    directly into the LLM prompt. Covers: routes, element IDs with tag/type
+    context, data-testid, visible button/link text, and JS UI messages.
     """
     root = Path(directory)
-    ids: set[str] = set()
+    ids: dict[str, str] = {}        # id_val -> human description
     data_testids: set[str] = set()
-    js_classes: set[str] = set()
+    html_routes: list[str] = []
+    button_texts: set[str] = set()
+    js_messages: set[str] = set()
 
     for path in root.rglob("*"):
         if any(ignored in path.parts for ignored in IGNORED_DIRS):
@@ -74,32 +76,93 @@ def extract_selectors(directory: str) -> str:
             continue
 
         if path.suffix == ".html":
-            ids.update(re.findall(r'\bid=["\']([^"\']+)["\']', content))
+            html_routes.append(path.relative_to(root).as_posix())
+
+            # Elements with IDs that have inner text (buttons, spans, p, h*)
+            for m in re.finditer(
+                r'<(\w+)[^>]*\bid=["\']([^"\']+)["\'][^>]*>(.*?)</\1>',
+                content, re.DOTALL | re.IGNORECASE,
+            ):
+                tag, id_val, inner = m.group(1).lower(), m.group(2), m.group(3)
+                text = re.sub(r"<[^>]+>", "", inner).strip()
+                desc = f"<{tag}>"
+                if text:
+                    desc += f" text={repr(text[:60])}"
+                ids.setdefault(id_val, desc)
+
+            # Inputs and self-closing buttons (may not have inner text)
+            for m in re.finditer(
+                r'<(input|button)[^>]*\bid=["\']([^"\']+)["\'][^>]*>',
+                content, re.IGNORECASE,
+            ):
+                tag, id_val = m.group(1).lower(), m.group(2)
+                attr_str = m.group(0)
+                type_m = re.search(r'type=["\']([^"\']+)["\']', attr_str)
+                ph_m = re.search(r'placeholder=["\']([^"\']+)["\']', attr_str)
+                desc = f"<{tag}>"
+                if type_m:
+                    desc += f" type={type_m.group(1)}"
+                if ph_m:
+                    desc += f" placeholder={repr(ph_m.group(1)[:50])}"
+                ids.setdefault(id_val, desc)
+
             data_testids.update(re.findall(r'data-testid=["\']([^"\']+)["\']', content))
 
-        if path.suffix in {".js", ".jsx", ".ts", ".tsx"}:
-            # btn classes added via JS: element.classList.add('foo') or className = 'foo'
-            js_classes.update(re.findall(r'classList\.add\(["\']([^"\']+)["\']', content))
-            js_classes.update(re.findall(r'\.className\s*=\s*["\']([^"\']+)["\']', content))
-            # setAttribute('id', 'foo')
-            ids.update(re.findall(r'setAttribute\(["\']id["\'],\s*["\']([^"\']+)["\']', content))
+            # Visible text of all buttons and links (for cy.contains fallback)
+            for m in re.finditer(r'<button[^>]*>(.*?)</button>', content, re.DOTALL | re.IGNORECASE):
+                text = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+                if text:
+                    button_texts.add(text)
+            for m in re.finditer(r'<a[^>]*>(.*?)</a>', content, re.DOTALL | re.IGNORECASE):
+                text = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+                if text and len(text) < 60:
+                    button_texts.add(text)
 
-    lines = ["=== SELECTORS EXTRACTED FROM PROJECT SOURCE (use these, do not invent others) ==="]
+        if path.suffix in {".js", ".jsx", ".ts", ".tsx"}:
+            # IDs set via setAttribute
+            for id_val in re.findall(
+                r'setAttribute\(["\']id["\'],\s*["\']([^"\']+)["\']', content
+            ):
+                ids.setdefault(id_val, "<element> (set via JS)")
+
+            # UI messages assigned to textContent / innerText
+            js_messages.update(re.findall(r'\.textContent\s*=\s*["\']([^"\']{4,})["\']', content))
+            js_messages.update(re.findall(r'\.innerText\s*=\s*["\']([^"\']{4,})["\']', content))
+            js_messages.update(re.findall(r'\.textContent\s*=\s*`([^`]{4,})`', content))
+
+    lines = [
+        "=== PROJECT MAP — use ONLY what is listed here, never invent selectors, routes, or text ===",
+    ]
+
+    if html_routes:
+        lines.append("\nAvailable pages for cy.visit():")
+        for route in sorted(html_routes):
+            lines.append(f"  /{route}")
+
     if ids:
-        lines.append("\nElement IDs (use as #id in Cypress):")
-        for item in sorted(ids):
-            lines.append(f"  #{item}")
+        lines.append("\nElement IDs — use as cy.get('#id'):")
+        for id_val, desc in sorted(ids.items()):
+            lines.append(f"  #{id_val}  {desc}")
+
     if data_testids:
-        lines.append("\ndata-testid attributes:")
+        lines.append("\ndata-testid attributes — use as cy.get('[data-testid=\"x\"]'):")
         for item in sorted(data_testids):
-            lines.append(f"  [data-testid={item}]")
-    if js_classes:
-        lines.append("\nCSS classes assigned dynamically in JS (use as .classname):")
-        for item in sorted(js_classes):
-            lines.append(f"  .{item}")
-    if not (ids or data_testids or js_classes):
-        lines.append("No IDs or data-testid attributes found — use cy.contains() with visible text.")
-    lines.append("=== END OF SELECTORS ===\n")
+            lines.append(f"  [data-testid=\"{item}\"]")
+
+    if button_texts:
+        lines.append("\nVisible button/link text — use cy.contains('exact text') only if no ID exists:")
+        for text in sorted(button_texts):
+            lines.append(f"  {repr(text)}")
+
+    if js_messages:
+        lines.append("\nUI messages set in JavaScript — use exact strings in assertions:")
+        for msg in sorted(js_messages):
+            lines.append(f"  {repr(msg)}")
+
+    if not (ids or data_testids):
+        lines.append("No IDs or data-testid found — use cy.contains() with the visible text listed above.")
+
+    lines.append("\n=== END OF PROJECT MAP ===\n")
     return "\n".join(lines)
 
 

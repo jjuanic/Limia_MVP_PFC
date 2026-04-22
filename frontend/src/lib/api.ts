@@ -34,15 +34,31 @@ export async function syncProject(projectId: number): Promise<{ chunks_indexed: 
   return res.json();
 }
 
+export interface GenerateResult {
+  test_request_id: number;
+  cypress_code: string;
+  response_type: "code" | "plan" | "chat";
+}
+
+export interface GenerateError {
+  error: string;
+}
+
 export async function generateTest(
   projectId: number,
-  instruction: string
-): Promise<{ test_request_id: number; cypress_code: string }> {
+  instruction: string,
+  signal?: AbortSignal,
+): Promise<GenerateResult | GenerateError> {
   const res = await fetch(`${BASE}/projects/${projectId}/generate/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ instruction }),
+    signal,
   });
+  if (!res.ok) {
+    const text = await res.text();
+    try { return JSON.parse(text); } catch { return { error: `Server error ${res.status}` }; }
+  }
   return res.json();
 }
 
